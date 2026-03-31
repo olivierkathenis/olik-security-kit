@@ -24,7 +24,11 @@ export async function checkHeaders(rawUrl) {
   const httpUrl = httpsUrl?.replace('https://', 'http://')
   if (!httpsUrl) { findings.push({ severity: 'CRITICAL', check: 'URL invalide', detail: rawUrl, fix: 'Fournir une URL valide' }); return findings }
   const httpsResult = await fetchHeaders(httpsUrl)
-  if (!httpsResult.ok) { findings.push({ severity: 'CRITICAL', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS' }); return findings }
+  if (!httpsResult.ok) {
+    // HIGH (pas CRITICAL) — l'URL peut être un staging offline ou non déployé
+    findings.push({ severity: 'HIGH', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS ou vérifier que le site est déployé' })
+    return findings
+  }
   if (httpUrl) {
     const httpResult = await fetchHeaders(httpUrl)
     if (httpResult.ok) {
