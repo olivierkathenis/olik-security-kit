@@ -55,26 +55,27 @@ jobs:
       - name: Calcul grade
         id: grade
         run: |
-          node - <<'EOF'
-          import { readFileSync, existsSync } from 'fs'
-          const logs = ['scan-secrets.log','scan-vuln.log','scan-headers.log'].filter(f=>existsSync(f)).map(f=>readFileSync(f,'utf-8')).join('\n')
+          node --input-type=module <<'EOF'
+          import { readFileSync, existsSync, appendFileSync } from 'fs'
+          const logs = ['scan-secrets.log','scan-vuln.log','scan-headers.log']
+            .filter(f => existsSync(f))
+            .map(f => readFileSync(f, 'utf-8'))
+            .join('\n')
           const hasCritical = /\[CRITICAL\]/.test(logs)
-          const hasHigh = /\[HIGH\]/.test(logs)
-          const mediums = (logs.match(/\[MEDIUM\]/g)??[]).length
-          let grade='A'
-          if(hasCritical) grade='F'
-          else if(hasHigh) grade='D'
-          else if(mediums>=3) grade='C'
-          else if(mediums>=1) grade='B'
-          const minGrade='${{ inputs.min_grade }}'
-          const order=['A','B','C','D','F']
-          const ok=order.indexOf(grade)<=order.indexOf(minGrade)
-          const {appendFileSync}=await import('fs')
-          const out=process.env.GITHUB_OUTPUT??'/dev/null'
-          appendFileSync(out,`grade=${grade}\nhas_critical=${hasCritical}\ngrade_ok=${ok}\n`)
+          const hasHigh     = /\[HIGH\]/.test(logs)
+          const mediums     = (logs.match(/\[MEDIUM\]/g) ?? []).length
+          let grade = 'A'
+          if (hasCritical)    grade = 'F'
+          else if (hasHigh)   grade = 'D'
+          else if (mediums >= 3) grade = 'C'
+          else if (mediums >= 1) grade = 'B'
+          const minGrade = '${{ inputs.min_grade }}'
+          const order = ['A','B','C','D','F']
+          const ok = order.indexOf(grade) <= order.indexOf(minGrade)
+          const out = process.env.GITHUB_OUTPUT ?? '/dev/null'
+          appendFileSync(out, `grade=${grade}\nhas_critical=${hasCritical}\ngrade_ok=${ok}\n`)
           console.log(`Grade: ${grade} | OK: ${ok}`)
           EOF
-        shell: node {0}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
