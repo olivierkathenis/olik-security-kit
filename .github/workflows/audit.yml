@@ -1,0 +1,145 @@
+name: Security Audit (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      scan_type:
+        description: "'secrets' | 'vuln' | 'all'"
+        type: string
+        default: 'all'
+      url:
+        description: 'URL à scanner pour les headers (optionnel)'
+        type: string
+        default: ''
+      fail_on_critical:
+        description: 'Faire échouer le CI si CRITICAL trouvé'
+        type: boolean
+        default: true
+      min_grade:
+        description: 'Grade minimum accepté (A/B/C/D/F)'
+        type: string
+        default: 'C'
+
+jobs:
+  audit:
+    name: VICE Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout projet cible
+        uses: actions/checkout@v4
+        with:
+          path: project
+
+      - name: Checkout olik-security-kit
+        uses: actions/checkout@v4
+        with:
+          repository: olivierkathenis/olik-security-kit
+          ref: main
+          path: olik-security-kit
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: olik-security-kit/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: olik-security-kit
+
+      - name: Run audit — secrets
+        if: inputs.scan_type == 'secrets' || inputs.scan_type == 'all'
+        id: secrets
+        run: |
+          node olik-security-kit/bin/audit.js secrets ./project 2>&1 | tee scan-secrets.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Run audit — vuln
+        if: inputs.scan_type == 'vuln' || inputs.scan_type == 'all'
+        id: vuln
+        run: |
+          node olik-security-kit/bin/audit.js vuln ./project 2>&1 | tee scan-vuln.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Run audit — headers
+        if: (inputs.scan_type == 'all') && inputs.url != ''
+        id: headers
+        run: |
+          node olik-security-kit/bin/audit.js headers "${{ inputs.url }}" 2>&1 | tee scan-headers.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Aggregate findings + grade
+        id: grade
+        run: |
+          node - <<'EOF'
+          import { readFileSync, existsSync } from 'fs'
+
+          const logs = ['scan-secrets.log', 'scan-vuln.log', 'scan-headers.log']
+            .filter(f => existsSync(f))
+            .map(f => readFileSync(f, 'utf-8'))
+            .join('\n')
+
+          const hasCritical = /\[CRITICAL\]/.test(logs)
+          const hasHigh     = /\[HIGH\]/.test(logs)
+          const mediumCount = (logs.match(/\[MEDIUM\]/g) ?? []).length
+
+          let grade = 'A'
+          if (hasCritical)       grade = 'F'
+          else if (hasHigh)      grade = 'D'
+          else if (mediumCount >= 3) grade = 'C'
+          else if (mediumCount >= 1) grade = 'B'
+
+          console.log(`Grade : ${grade}`)
+          console.log(`has_critical=${hasCritical}`)
+
+          const minGrade = '${{ inputs.min_grade }}'
+          const gradeOrder = ['A','B','C','D','F']
+          const gradeOk = gradeOrder.indexOf(grade) <= gradeOrder.indexOf(minGrade)
+          console.log(`Grade OK : ${gradeOk} (${grade} vs min ${minGrade})`)
+
+          const output = process.env.GITHUB_OUTPUT ?? '/dev/null'
+          const { appendFileSync } = await import('fs')
+          appendFileSync(output, `grade=${grade}\n`)
+          appendFileSync(output, `has_critical=${hasCritical}\n`)
+          appendFileSync(output, `grade_ok=${gradeOk}\n`)
+          EOF
+        shell: node {0}
+
+      - name: Upload rapport
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-audit-report
+          path: |
+            scan-secrets.log
+            scan-vuln.log
+            scan-headers.log
+          retention-days: 30
+
+      - name: Fail si CRITICAL trouvé
+        if: inputs.fail_on_critical == true && steps.grade.outputs.has_critical == 'true'
+        run: |
+          echo "::error::Findings CRITICAL détectés — audit échoué (fail_on_critical=true)"
+          exit 1
+
+      - name: Fail si grade insuffisant
+        if: steps.grade.outputs.grade_ok == 'false'
+        run: |
+          echo "::error::Grade ${{ steps.grade.outputs.grade }} inférieur au minimum requis (${{ inputs.min_grade }})"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Résultat VICE Security Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Paramètre | Valeur |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Grade | ${{ steps.grade.outputs.grade }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CRITICAL | ${{ steps.grade.outputs.has_critical }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Grade min requis | ${{ inputs.min_grade }} |" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,187 @@
+import { readdir, readFile, stat } from 'fs/promises'
+import { join, relative, extname } from 'path'
+import { SECRET_PATTERNS } from '../config/patterns.js'
+
+const IGNORE_DIRS = new Set([
+  'node_modules', '.git', 'vendor', '.next', 'dist', 'build', 'scans', 'coverage',
+  // Traductions UI — labels "password" en clair sont normaux ici
+  'translations', 'locales', 'lang', 'i18n',
+])
+
+const IGNORE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg',
+  '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.pdf', '.lock', '.zip', '.tar', '.gz', '.7z',
+])
+
+const FALSE_POSITIVE_PATTERNS = [
+  // Références à des variables d'environnement (pas la valeur réelle)
+  /process\.env\./,
+  /import\.meta\.env\./,
+  /\$\{[A-Z_][A-Z0-9_]*\}/,   // ${DB_PASSWORD}, ${API_KEY}...
+  /^[A-Z_][A-Z0-9_]*$/,       // ALL_CAPS = nom de variable, pas une valeur
+
+  // Placeholders évidents dans la doc/exemples
+  /your_/i,
+  /example/i,
+  /changeme/i,
+  /REPLACE_/i,
+  /INSERT_/i,
+  /TODO/i,
+  /FIXME/i,
+  /^xxx+$/i,
+  /^yyy+$/i,
+  /^zzz+$/i,
+
+  // Credentials de dev standard (mot de passe extrait seul)
+  /^symfony$/,
+  /^root$/,
+  /^admin$/,
+  /^password$/i,
+  /^secret$/i,
+  /^test$/i,
+
+  // Patterns URL avec placeholders évidents
+  /user:pass@/i,
+  /username:password/i,
+  /db_user:db_pass/i,
+  /DB_USER:DB_PASS/,
+  /MY_SECRET_PASSWORD/i,
+  /ChangeMe/,
+  /!ChangeMe!/,
+
+  // Séquences évidentes (tokens de démo)
+  /1234567890abcdef/,
+  /abcdefghijklmnop/i,
+
+  // Mots de passe d'exemple dans la doc
+  /MySecretPassword/i,
+  /MyPassword/i,
+  /SuperSecret/i,
+  /Passw0rd/i,
+]
+
+const MAX_FILE_SIZE = 500 * 1024 // 500 KB
+
+function isFalsePositive(match) {
+  return FALSE_POSITIVE_PATTERNS.some(p => p.test(match))
+}
+
+export async function loadIgnore(projectPath) {
+  const ignoreFile = join(projectPath, '.viceignore')
+  try {
+    const raw = await readFile(ignoreFile, 'utf-8')
+    return new Set(
+      raw.split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !l.startsWith('#'))
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function matchesIgnore(filePath, ignoreSet) {
+  if (ignoreSet.size === 0) return false
+  for (const pattern of ignoreSet) {
+    if (filePath.includes(pattern)) return true
+  }
+  return false
+}
+
+export async function scanSecrets(projectPath) {
+  const ignoreSet = await loadIgnore(projectPath)
+  const findings = []
+
+  async function walk(dir) {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name)
+      const relPath = relative(projectPath, fullPath)
+
+      if (entry.isDirectory()) {
+        if (IGNORE_DIRS.has(entry.name)) continue
+        if (matchesIgnore(relPath, ignoreSet)) continue
+        await walk(fullPath)
+        continue
+      }
+
+      if (!entry.isFile()) continue
+      if (matchesIgnore(relPath, ignoreSet)) continue
+
+      const ext = extname(entry.name).toLowerCase()
+      if (IGNORE_EXTENSIONS.has(ext)) continue
+
+      // .env files : only CRITICAL patterns
+      const isEnvFile = entry.name.startsWith('.env')
+
+      try {
+        const fileStat = await stat(fullPath)
+        if (fileStat.size > MAX_FILE_SIZE) continue
+
+        const content = await readFile(fullPath, 'utf-8')
+        const lines = content.split('\n')
+        const seen = new Set()
+
+        for (const pattern of SECRET_PATTERNS) {
+          if (isEnvFile && pattern.severity !== 'CRITICAL') continue
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]
+            const match = line.match(pattern.regex)
+            if (!match) continue
+
+            const matchValue = match[1] ?? match[0]
+            if (isFalsePositive(matchValue)) continue
+
+            const dedupeKey = `${relPath}:${pattern.name}:${matchValue}`
+            if (seen.has(dedupeKey)) continue
+            seen.add(dedupeKey)
+
+            findings.push({
+              severity: pattern.severity,
+              file: relPath,
+              line: i + 1,
+              pattern: pattern.name,
+              match: matchValue.substring(0, 40),
+            })
+          }
+        }
+      } catch {
+        // fichier illisible (binaire mal détecté, etc.)
+      }
+    }
+  }
+
+  await walk(projectPath)
+  return findings
+}
+
+// CLI
+if (process.argv[1].endsWith('secrets.js')) {
+  const projectPath = process.argv[2] ?? process.cwd()
+
+  console.log(`Scan secrets : ${projectPath}\n`)
+
+  const findings = await scanSecrets(projectPath)
+
+  if (findings.length === 0) {
+    console.log('✓ Aucun secret détecté.')
+    process.exit(0)
+  }
+
+  for (const f of findings) {
+    const prefix = f.severity === 'CRITICAL' ? '🔴' : f.severity === 'HIGH' ? '🟠' : '🟡'
+    console.log(`${prefix} [${f.severity}] ${f.pattern}`)
+    console.log(`   ${f.file}:${f.line} — "${f.match}"`)
+  }
+
+  console.log(`\nTotal : ${findings.length} finding(s)`)
+  process.exit(findings.some(f => f.severity === 'CRITICAL') ? 2 : 1)
+}

@@ -1,0 +1,67 @@
+# Dependances
+node_modules/
+vendor/
+
+# Build et cache
+.next/
+out/
+dist/
+build/
+var/cache/
+var/log/
+var/sessions/
+
+# Assets compiles
+public/build/
+public/bundles/
+public/_next/
+
+# Uploads et medias utilisateur
+public/uploads/
+public/media/
+
+# Fichiers de lock (donnees structurees, pas de secrets)
+composer.lock
+yarn.lock
+package-lock.json
+
+# IDE et OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+Thumbs.db
+
+# Tests et fixtures
+tests/
+spec/
+cypress/
+__tests__/
+fixtures/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Storybook
+.storybook/
+storybook-static/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Migrations (SQL generee, pas de code applicatif)
+migrations/
+
+# Documentation et guides (exemples/placeholders intentionnels)
+assistants/
+docs/
+CONTRIBUTING.md
+CHANGELOG.md
+
+# Traductions (labels UI, pas des credentials)
+translations/
+locales/
+lang/
