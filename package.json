@@ -1,0 +1,17 @@
+{
+  "name": "olik-security-kit",
+  "version": "1.0.0",
+  "description": "Security audit scripts for Olik Communication projects (Symfony + Next.js)",
+  "type": "module",
+  "bin": { "olik-security": "./bin/audit.js" },
+  "scripts": {
+    "audit:secrets": "node scripts/secrets.js",
+    "audit:headers": "node scripts/headers.js",
+    "audit:vuln": "node scripts/vuln-scan.js",
+    "audit:all": "node bin/audit.js"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "dependencies": {
+    "chalk": "^5.3.0"
+  }
+}

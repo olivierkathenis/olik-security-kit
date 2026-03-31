@@ -1,0 +1,96 @@
+name: Security Audit (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      scan_type:
+        description: "'secrets' | 'vuln' | 'all'"
+        type: string
+        default: 'all'
+      url:
+        description: 'URL à scanner pour les headers'
+        type: string
+        default: ''
+      fail_on_critical:
+        description: 'Echouer si CRITICAL trouvé'
+        type: boolean
+        default: true
+      min_grade:
+        description: 'Grade minimum (A/B/C/D/F)'
+        type: string
+        default: 'C'
+
+jobs:
+  audit:
+    name: Olik Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project
+      - uses: actions/checkout@v4
+        with:
+          repository: olivierkathenis/olik-security-kit
+          ref: main
+          path: olik-security-kit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: olik-security-kit/package-lock.json
+      - run: npm ci
+        working-directory: olik-security-kit
+      - name: Audit secrets
+        if: inputs.scan_type == 'secrets' || inputs.scan_type == 'all'
+        run: node olik-security-kit/bin/audit.js secrets ./project 2>&1 | tee scan-secrets.log
+        continue-on-error: true
+      - name: Audit vuln
+        if: inputs.scan_type == 'vuln' || inputs.scan_type == 'all'
+        run: node olik-security-kit/bin/audit.js vuln ./project 2>&1 | tee scan-vuln.log
+        continue-on-error: true
+      - name: Audit headers
+        if: inputs.scan_type == 'all' && inputs.url != ''
+        run: node olik-security-kit/bin/audit.js headers "${{ inputs.url }}" 2>&1 | tee scan-headers.log
+        continue-on-error: true
+      - name: Calcul grade
+        id: grade
+        run: |
+          node - <<'EOF'
+          import { readFileSync, existsSync } from 'fs'
+          const logs = ['scan-secrets.log','scan-vuln.log','scan-headers.log'].filter(f=>existsSync(f)).map(f=>readFileSync(f,'utf-8')).join('\n')
+          const hasCritical = /\[CRITICAL\]/.test(logs)
+          const hasHigh = /\[HIGH\]/.test(logs)
+          const mediums = (logs.match(/\[MEDIUM\]/g)??[]).length
+          let grade='A'
+          if(hasCritical) grade='F'
+          else if(hasHigh) grade='D'
+          else if(mediums>=3) grade='C'
+          else if(mediums>=1) grade='B'
+          const minGrade='${{ inputs.min_grade }}'
+          const order=['A','B','C','D','F']
+          const ok=order.indexOf(grade)<=order.indexOf(minGrade)
+          const {appendFileSync}=await import('fs')
+          const out=process.env.GITHUB_OUTPUT??'/dev/null'
+          appendFileSync(out,`grade=${grade}\nhas_critical=${hasCritical}\ngrade_ok=${ok}\n`)
+          console.log(`Grade: ${grade} | OK: ${ok}`)
+          EOF
+        shell: node {0}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-audit-report
+          path: scan-*.log
+          retention-days: 30
+      - name: Fail CRITICAL
+        if: inputs.fail_on_critical == true && steps.grade.outputs.has_critical == 'true'
+        run: echo "::error::CRITICAL findings détectés" && exit 1
+      - name: Fail grade
+        if: steps.grade.outputs.grade_ok == 'false'
+        run: echo "::error::Grade ${{ steps.grade.outputs.grade }} < minimum ${{ inputs.min_grade }}" && exit 1
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Olik Security Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Grade | CRITICAL | Min requis |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|----------|------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${{ steps.grade.outputs.grade }} | ${{ steps.grade.outputs.has_critical }} | ${{ inputs.min_grade }} |" >> "$GITHUB_STEP_SUMMARY"
