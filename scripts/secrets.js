@@ -9,6 +9,7 @@ const FALSE_POSITIVE_PATTERNS = [
   /your_/i, /example/i, /changeme/i, /REPLACE_/i, /INSERT_/i, /TODO/i, /FIXME/i,
   /^xxx+$/i, /^yyy+$/i, /^zzz+$/i,
   /^symfony$/, /^root$/, /^admin$/, /^password$/i, /^secret$/i, /^test$/i,
+  /^motdepasse$/i, /^mot_de_passe$/i,  // Placeholders français
   /user:pass@/i, /username:password/i, /db_user:db_pass/i, /DB_USER:DB_PASS/, /MY_SECRET_PASSWORD/i, /ChangeMe/, /!ChangeMe!/,
   /1234567890abcdef/, /abcdefghijklmnop/i,
   /MySecretPassword/i, /MyPassword/i, /SuperSecret/i, /Passw0rd/i,
