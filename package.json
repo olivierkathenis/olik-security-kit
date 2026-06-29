@@ -5,6 +5,7 @@
   "type": "module",
   "bin": { "olik-security": "./bin/audit.js" },
   "scripts": {
+    "test": "node --test",
     "audit:secrets": "node scripts/secrets.js",
     "audit:headers": "node scripts/headers.js",
     "audit:vuln": "node scripts/vuln-scan.js",

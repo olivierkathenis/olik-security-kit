@@ -2,11 +2,16 @@ import { SECURITY_HEADERS, LEAK_HEADERS } from '../config/headers.js'
 
 const TIMEOUT_MS = 10_000
 
-async function fetchHeaders(url) {
+// follow: true suit les redirects (jusqu'à 20) pour évaluer les headers de la
+// page finale. Indispensable pour les sites dont la racine fait un 301 (locale
+// /→/fr/, trailing-slash, www) : sinon on évalue la réponse 301, qui n'a
+// légitimement aucun header de sécurité → faux positif « CSP manquant ».
+// manual (défaut) reste requis pour la sonde HTTP→HTTPS qui inspecte le 301.
+async function fetchHeaders(url, { follow = false } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const res = await fetch(url, { method: 'GET', redirect: 'manual', signal: controller.signal })
+    const res = await fetch(url, { method: 'GET', redirect: follow ? 'follow' : 'manual', signal: controller.signal })
     clearTimeout(timer)
     return { ok: true, status: res.status, headers: res.headers }
   } catch (err) { clearTimeout(timer); return { ok: false, error: err.message } }
@@ -23,7 +28,7 @@ export async function checkHeaders(rawUrl) {
   const httpsUrl = rawUrl.startsWith('http://') ? rawUrl.replace('http://', 'https://') : normalizeUrl(rawUrl)
   const httpUrl = httpsUrl?.replace('https://', 'http://')
   if (!httpsUrl) { findings.push({ severity: 'CRITICAL', check: 'URL invalide', detail: rawUrl, fix: 'Fournir une URL valide' }); return findings }
-  const httpsResult = await fetchHeaders(httpsUrl)
+  const httpsResult = await fetchHeaders(httpsUrl, { follow: true })
   if (!httpsResult.ok) {
     // HIGH (pas CRITICAL) — l'URL peut être un staging offline ou non déployé
     findings.push({ severity: 'HIGH', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS ou vérifier que le site est déployé' })
