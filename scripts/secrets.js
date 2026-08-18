@@ -12,6 +12,11 @@ const FALSE_POSITIVE_PATTERNS = [
   /^motdepasse$/i, /^mot_de_passe$/i,  // Placeholders français
   /user:pass@/i, /username:password/i, /db_user:db_pass/i, /DB_USER:DB_PASS/, /MY_SECRET_PASSWORD/i, /ChangeMe/, /!ChangeMe!/,
   /1234567890abcdef/, /abcdefghijklmnop/i,
+  // Ajouts 18/08/2026 : placeholders de redaction et variables non substituees
+  /^\[.*\]$/,        // [mot de passe purge], [PAS DE MOT DE PASSE ICI]
+  /^<.*>$/,           // <TOKEN>, <a-remplir>
+  /^\$[A-Za-z_]/,     // $POSTGRES_PASSWORD, $MJ_APIKEY
+  /^mot-de-passe/i, /^a-definir/i, /^redacted/i, /^purge/i,
   /MySecretPassword/i, /MyPassword/i, /SuperSecret/i, /Passw0rd/i,
 ]
 const MAX_FILE_SIZE = 500 * 1024
