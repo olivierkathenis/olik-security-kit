@@ -7,14 +7,33 @@ const TIMEOUT_MS = 10_000
 // /→/fr/, trailing-slash, www) : sinon on évalue la réponse 301, qui n'a
 // légitimement aucun header de sécurité → faux positif « CSP manquant ».
 // manual (défaut) reste requis pour la sonde HTTP→HTTPS qui inspecte le 301.
-async function fetchHeaders(url, { follow = false } = {}) {
+async function fetchHeaders(url, { follow = false, basicAuth = '' } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const res = await fetch(url, { method: 'GET', redirect: follow ? 'follow' : 'manual', signal: controller.signal })
-    clearTimeout(timer)
-    return { ok: true, status: res.status, headers: res.headers }
-  } catch (err) { clearTimeout(timer); return { ok: false, error: err.message } }
+    // Credentials never reach HTTP or a different origin, including redirects.
+    const origin = new URL(url).origin
+    let target = new URL(url)
+    for (let redirects = 0; redirects <= 20; redirects++) {
+      if (basicAuth && (target.protocol !== 'https:' || target.origin !== origin || target.username || target.password)) {
+        return { ok: false }
+      }
+      const res = await fetch(target.href, {
+        method: 'GET', redirect: basicAuth ? 'manual' : follow ? 'follow' : 'manual',
+        signal: controller.signal,
+        ...(basicAuth ? { headers: { Authorization: `Basic ${Buffer.from(basicAuth).toString('base64')}` } } : {}),
+      })
+      const location = res.headers.get('location')
+      if (basicAuth && follow && [301, 302, 303, 307, 308].includes(res.status) && location) {
+        await res.body?.cancel()
+        target = new URL(location, target)
+        continue
+      }
+      await res.body?.cancel()
+      return { ok: true, status: res.status, headers: res.headers }
+    }
+    return { ok: false }
+  } catch { return { ok: false } } finally { clearTimeout(timer) }
 }
 
 function normalizeUrl(raw) {
@@ -28,11 +47,21 @@ export async function checkHeaders(rawUrl) {
   const httpsUrl = rawUrl.startsWith('http://') ? rawUrl.replace('http://', 'https://') : normalizeUrl(rawUrl)
   const httpUrl = httpsUrl?.replace('https://', 'http://')
   if (!httpsUrl) { findings.push({ severity: 'CRITICAL', check: 'URL invalide', detail: rawUrl, fix: 'Fournir une URL valide' }); return findings }
-  const httpsResult = await fetchHeaders(httpsUrl, { follow: true })
+  const basicAuth = process.env.OLIK_SECURITY_BASIC_AUTH ?? ''
+  if (basicAuth && (!basicAuth.includes(':') || basicAuth.startsWith(':') || /[\r\n]/.test(basicAuth))) {
+    return [{ severity: 'CRITICAL', check: 'Authentification audit invalide', detail: 'Secret BasicAuth mal formé.', fix: 'Configurer OLIK_SECURITY_BASIC_AUTH au format utilisateur:mot-de-passe' }]
+  }
+  const httpsResult = await fetchHeaders(httpsUrl, { follow: true, basicAuth })
   if (!httpsResult.ok) {
-    // HIGH (pas CRITICAL) — l'URL peut être un staging offline ou non déployé
-    findings.push({ severity: 'HIGH', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS ou vérifier que le site est déployé' })
+    // Un audit authentifié incomplet doit échouer, quel que soit min_grade.
+    findings.push({ severity: basicAuth ? 'CRITICAL' : 'HIGH', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS ou vérifier que le site est déployé' })
     return findings
+  }
+  if ([401, 403].includes(httpsResult.status)) {
+    return [{ severity: 'CRITICAL', check: 'Audit headers non authentifié', detail: `HTTP ${httpsResult.status} : la réponse ne permet pas d’auditer la page.`, fix: 'Vérifier le secret BasicAuth et les autorisations du staging' }]
+  }
+  if (basicAuth && (httpsResult.status < 200 || httpsResult.status >= 300)) {
+    return [{ severity: 'CRITICAL', check: 'Audit headers sans page valide', detail: `HTTP ${httpsResult.status} : une réponse 2xx est requise pour l’audit authentifié.`, fix: 'Vérifier la disponibilité de la page et ses redirections' }]
   }
   if (httpUrl) {
     const httpResult = await fetchHeaders(httpUrl)
@@ -58,6 +87,15 @@ export async function checkHeaders(rawUrl) {
       if (!/HttpOnly/i.test(cookie)) findings.push({ severity: 'HIGH', check: `Cookie sans HttpOnly : ${name}`, detail: 'Accessible via JS — risque XSS', fix: `Ajouter HttpOnly` })
       if (!/Secure/i.test(cookie)) findings.push({ severity: 'MEDIUM', check: `Cookie sans Secure : ${name}`, detail: 'Peut être transmis en HTTP clair', fix: `Ajouter Secure` })
       if (!/SameSite/i.test(cookie)) findings.push({ severity: 'LOW', check: `Cookie sans SameSite : ${name}`, detail: 'Protection CSRF réduite', fix: `Ajouter SameSite=Lax` })
+    }
+  }
+  // Do not expose credentials even if a server reflects them in a header.
+  if (basicAuth) {
+    const sensitive = [basicAuth, Buffer.from(basicAuth).toString('base64'), basicAuth.slice(basicAuth.indexOf(':') + 1)].filter(Boolean)
+    for (const finding of findings) {
+      for (const key of ['check', 'detail', 'fix']) {
+        for (const value of sensitive) finding[key] = finding[key]?.split(value).join('[REDACTED]')
+      }
     }
   }
   return findings

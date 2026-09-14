@@ -3,6 +3,10 @@ name: Security Audit (reusable)
 on:
   workflow_call:
     inputs:
+      kit_ref:
+        description: 'Version du kit à exécuter (SHA conseillé)'
+        type: string
+        default: 'main'
       scan_type:
         description: "'secrets' | 'vuln' | 'all'"
         type: string
@@ -20,6 +24,11 @@ on:
         type: string
         default: 'C'
 
+    secrets:
+      headers_basic_auth:
+        description: 'BasicAuth optionnel du staging (utilisateur:mot-de-passe)'
+        required: false
+
 jobs:
   audit:
     name: Olik Security Audit
@@ -31,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: olivierkathenis/olik-security-kit
-          ref: main
+          ref: ${{ inputs.kit_ref }}
           path: olik-security-kit
       - uses: actions/setup-node@v4
         with:
@@ -50,7 +59,10 @@ jobs:
         continue-on-error: true
       - name: Audit headers
         if: inputs.scan_type == 'all' && inputs.url != ''
-        run: node olik-security-kit/bin/audit.js headers "${{ inputs.url }}" 2>&1 | tee scan-headers.log
+        env:
+          OLIK_SECURITY_BASIC_AUTH: ${{ secrets.headers_basic_auth }}
+          AUDIT_URL: ${{ inputs.url }}
+        run: node olik-security-kit/bin/audit.js headers "$AUDIT_URL" 2>&1 | tee scan-headers.log
         continue-on-error: true
       - name: Calcul grade
         id: grade
