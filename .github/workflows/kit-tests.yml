@@ -1,0 +1,32 @@
+name: Tests et recette du kit
+
+on:
+  pull_request:
+  push:
+    branches: ['work/audit-fiable-2026-10-03']
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+  same-commit-audit:
+    needs: tests
+    uses: ./.github/workflows/audit.yml
+    with:
+      scan_type: all
+      url: ''
+      fail_on_critical: true
+      min_grade: C

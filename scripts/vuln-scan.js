@@ -7,14 +7,14 @@ const PHP_EXTENSIONS = new Set(['.php'])
 const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
 const TEST_FILE_REGEX = /\.(test|spec)\.[^.]+$|__tests__/
 
-export async function scanVulns(projectPath) {
+export async function scanVulns(projectPath, { strict = false } = {}) {
   const findings = []
-  const stack = await detectStack(projectPath)
+  const stack = await detectStack(projectPath, { strict })
   const hasPhp = stack.php || stack.symfony.detected
   const hasTs = stack.typescript || stack.nextjs.detected
   async function walk(dir) {
     let entries
-    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch (error) { if (strict) throw error; return }
     for (const entry of entries) {
       const fullPath = join(dir, entry.name)
       const relPath = relative(projectPath, fullPath)
@@ -38,7 +38,7 @@ export async function scanVulns(projectPath) {
             findings.push({ severity: pattern.severity, file: relPath, line: i + 1, pattern: pattern.name, context: lines[i].substring(Math.max(0, idx - 40), Math.min(lines[i].length, idx + match[0].length + 40)).trim(), fix: pattern.fix ?? null })
           }
         }
-      } catch {}
+      } catch (error) { if (strict) throw error }
     }
   }
   await walk(projectPath)

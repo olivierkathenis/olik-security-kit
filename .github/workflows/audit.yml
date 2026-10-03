@@ -20,19 +20,46 @@ on:
         type: string
         default: 'C'
 
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: Olik Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      - name: Valider les paramètres et le SHA du workflow appelé
+        id: identity
+        env:
+          KIT_SHA: ${{ job.workflow_sha }}
+          KIT_REPOSITORY: ${{ job.workflow_repository }}
+          SCAN_TYPE: ${{ inputs.scan_type }}
+          MIN_GRADE: ${{ inputs.min_grade }}
+        shell: bash
+        run: |
+          [[ "$KIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::SHA du workflow appelé absent ou invalide'; exit 1; }
+          [[ "$KIT_REPOSITORY" == 'olivierkathenis/olik-security-kit' ]] || { echo '::error::Dépôt du workflow inattendu'; exit 1; }
+          case "$SCAN_TYPE" in secrets|vuln|all) ;; *) echo '::error::scan_type invalide'; exit 1 ;; esac
+          case "$MIN_GRADE" in A|B|C|D|F) ;; *) echo '::error::min_grade invalide'; exit 1 ;; esac
+          printf 'sha=%s\n' "$KIT_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           path: project
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: olivierkathenis/olik-security-kit
-          ref: main
+          ref: ${{ steps.identity.outputs.sha }}
           path: olik-security-kit
+          persist-credentials: false
+      - name: Vérifier les scripts effectivement récupérés
+        env:
+          KIT_SHA: ${{ steps.identity.outputs.sha }}
+        shell: bash
+        run: |
+          [[ "$(git -C olik-security-kit rev-parse HEAD)" == "$KIT_SHA" ]] || { echo '::error::Scripts au mauvais SHA'; exit 1; }
+          printf 'SHA des scripts du kit : `%s`\n\n' "$KIT_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -40,58 +67,19 @@ jobs:
           cache-dependency-path: olik-security-kit/package-lock.json
       - run: npm ci
         working-directory: olik-security-kit
-      - name: Audit secrets
-        if: inputs.scan_type == 'secrets' || inputs.scan_type == 'all'
-        run: node olik-security-kit/bin/audit.js secrets ./project 2>&1 | tee scan-secrets.log
-        continue-on-error: true
-      - name: Audit vuln
-        if: inputs.scan_type == 'vuln' || inputs.scan_type == 'all'
-        run: node olik-security-kit/bin/audit.js vuln ./project 2>&1 | tee scan-vuln.log
-        continue-on-error: true
-      - name: Audit headers
-        if: inputs.scan_type == 'all' && inputs.url != ''
-        run: node olik-security-kit/bin/audit.js headers "${{ inputs.url }}" 2>&1 | tee scan-headers.log
-        continue-on-error: true
-      - name: Calcul grade
-        id: grade
-        run: |
-          node --input-type=module <<'EOF'
-          import { readFileSync, existsSync, appendFileSync } from 'fs'
-          const logs = ['scan-secrets.log','scan-vuln.log','scan-headers.log']
-            .filter(f => existsSync(f))
-            .map(f => readFileSync(f, 'utf-8'))
-            .join('\n')
-          const hasCritical = /\[CRITICAL\]/.test(logs)
-          const hasHigh     = /\[HIGH\]/.test(logs)
-          const mediums     = (logs.match(/\[MEDIUM\]/g) ?? []).length
-          let grade = 'A'
-          if (hasCritical)    grade = 'F'
-          else if (hasHigh)   grade = 'D'
-          else if (mediums >= 3) grade = 'C'
-          else if (mediums >= 1) grade = 'B'
-          const minGrade = '${{ inputs.min_grade }}'
-          const order = ['A','B','C','D','F']
-          const ok = order.indexOf(grade) <= order.indexOf(minGrade)
-          const out = process.env.GITHUB_OUTPUT ?? '/dev/null'
-          appendFileSync(out, `grade=${grade}\nhas_critical=${hasCritical}\ngrade_ok=${ok}\n`)
-          console.log(`Grade: ${grade} | OK: ${ok}`)
-          EOF
+      - name: Auditer et noter les rapports structurés complets
+        env:
+          SCAN_TYPE: ${{ inputs.scan_type }}
+          MIN_GRADE: ${{ inputs.min_grade }}
+          FAIL_ON_CRITICAL: ${{ inputs.fail_on_critical }}
+          AUDIT_URL: ${{ inputs.url }}
+          KIT_SHA: ${{ steps.identity.outputs.sha }}
+          PROJECT_PATH: ${{ github.workspace }}/project
+          REPORT_DIR: ${{ runner.temp }}/olik-security-audit-report
+        run: node olik-security-kit/scripts/ci-audit.js
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-audit-report
-          path: scan-*.log
+          path: ${{ runner.temp }}/olik-security-audit-report/*.json
           retention-days: 30
-      - name: Fail CRITICAL
-        if: inputs.fail_on_critical == true && steps.grade.outputs.has_critical == 'true'
-        run: echo "::error::CRITICAL findings détectés" && exit 1
-      - name: Fail grade
-        if: steps.grade.outputs.grade_ok == 'false'
-        run: echo "::error::Grade ${{ steps.grade.outputs.grade }} < minimum ${{ inputs.min_grade }}" && exit 1
-      - name: Summary
-        if: always()
-        run: |
-          echo "## Olik Security Audit" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Grade | CRITICAL | Min requis |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|----------|------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ${{ steps.grade.outputs.grade }} | ${{ steps.grade.outputs.has_critical }} | ${{ inputs.min_grade }} |" >> "$GITHUB_STEP_SUMMARY"
