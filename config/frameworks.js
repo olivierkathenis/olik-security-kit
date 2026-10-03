@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
-export async function detectStack(projectPath) {
+export async function detectStack(projectPath, { strict = false } = {}) {
   const result = {
     symfony: { detected: false, version: null },
     nextjs: { detected: false, version: null },
@@ -14,7 +14,7 @@ export async function detectStack(projectPath) {
     const sfVersion = composer?.require?.['symfony/framework-bundle'] ?? null;
     if (sfVersion) { result.symfony.detected = true; result.symfony.version = sfVersion; }
     if (composer?.require?.['php'] || sfVersion) result.php = true;
-  } catch {}
+  } catch (error) { if (strict && error.code !== 'ENOENT') throw error; }
   try {
     const raw = await readFile(join(projectPath, 'package.json'), 'utf-8');
     const pkg = JSON.parse(raw);
@@ -22,7 +22,7 @@ export async function detectStack(projectPath) {
     const nextVersion = allDeps?.['next'] ?? null;
     if (nextVersion) { result.nextjs.detected = true; result.nextjs.version = nextVersion; }
     if (allDeps?.['typescript']) result.typescript = true;
-  } catch {}
+  } catch (error) { if (strict && error.code !== 'ENOENT') throw error; }
   return result;
 }
 

@@ -18,11 +18,11 @@ const MAX_FILE_SIZE = 500 * 1024
 
 function isFalsePositive(match) { return FALSE_POSITIVE_PATTERNS.some(p => p.test(match)) }
 
-export async function loadIgnore(projectPath) {
+export async function loadIgnore(projectPath, { strict = false } = {}) {
   try {
     const raw = await readFile(join(projectPath, '.viceignore'), 'utf-8')
     return new Set(raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')))
-  } catch { return new Set() }
+  } catch (error) { if (strict && error.code !== 'ENOENT') throw error; return new Set() }
 }
 
 function matchesIgnore(filePath, ignoreSet) {
@@ -30,12 +30,12 @@ function matchesIgnore(filePath, ignoreSet) {
   return false
 }
 
-export async function scanSecrets(projectPath) {
-  const ignoreSet = await loadIgnore(projectPath)
+export async function scanSecrets(projectPath, { strict = false } = {}) {
+  const ignoreSet = await loadIgnore(projectPath, { strict })
   const findings = []
   async function walk(dir) {
     let entries
-    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch (error) { if (strict) throw error; return }
     for (const entry of entries) {
       const fullPath = join(dir, entry.name)
       const relPath = relative(projectPath, fullPath)
@@ -67,7 +67,7 @@ export async function scanSecrets(projectPath) {
             findings.push({ severity: pattern.severity, file: relPath, line: i + 1, pattern: pattern.name, match: matchValue.substring(0, 40) })
           }
         }
-      } catch {}
+      } catch (error) { if (strict) throw error }
     }
   }
   await walk(projectPath)

@@ -23,12 +23,13 @@ function normalizeUrl(raw) {
   }
 }
 
-export async function checkHeaders(rawUrl) {
+export async function checkHeaders(rawUrl, { strict = false } = {}) {
   const findings = []
   const httpsUrl = rawUrl.startsWith('http://') ? rawUrl.replace('http://', 'https://') : normalizeUrl(rawUrl)
   const httpUrl = httpsUrl?.replace('https://', 'http://')
   if (!httpsUrl) { findings.push({ severity: 'CRITICAL', check: 'URL invalide', detail: rawUrl, fix: 'Fournir une URL valide' }); return findings }
   const httpsResult = await fetchHeaders(httpsUrl, { follow: true })
+  if (strict && (!httpsResult.ok || httpsResult.status >= 400)) throw new Error('Sonde HTTPS incomplète')
   if (!httpsResult.ok) {
     // HIGH (pas CRITICAL) — l'URL peut être un staging offline ou non déployé
     findings.push({ severity: 'HIGH', check: 'HTTPS indisponible', detail: `Impossible de joindre ${httpsUrl}`, fix: 'Activer HTTPS ou vérifier que le site est déployé' })
@@ -36,6 +37,7 @@ export async function checkHeaders(rawUrl) {
   }
   if (httpUrl) {
     const httpResult = await fetchHeaders(httpUrl)
+    if (strict && !httpResult.ok) throw new Error('Sonde HTTP incomplète')
     if (httpResult.ok) {
       const isRedirect = httpResult.status >= 300 && httpResult.status < 400
       const location = httpResult.headers?.get('location') ?? ''
